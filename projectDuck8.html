@@ -1,0 +1,195 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>projectDuck8</title>
+
+<style>
+	#myCanvas {position:absolute; left:5px; top:5px; background-color:#dddddd;}
+	#debugCanvas {position:absolute; left:5px; top:5px; z-index:2; display:block;}
+</style>
+<script src="http://d309knd7es5f10.cloudfront.net/zim_1.3.js"></script>
+<script src="http://code.createjs.com/createjs-2014.12.12.min.js"></script>
+<script src="Box2dWeb-2.1.a.3.min.js"></script>
+<script src="physC1.js"></script><!-- helper code for box2D - assumes  Box2 vars below -->
+
+<script>
+// global Box2D shortcuts to classes
+var b2Vec2 = Box2D.Common.Math.b2Vec2;	
+var b2BodyDef = Box2D.Dynamics.b2BodyDef;
+var b2Body = Box2D.Dynamics.b2Body;
+var b2FixtureDef = Box2D.Dynamics.b2FixtureDef;
+var b2Fixture = Box2D.Dynamics.b2Fixture;
+var b2World = Box2D.Dynamics.b2World;
+var b2PolygonShape = Box2D.Collision.Shapes.b2PolygonShape;
+var b2CircleShape = Box2D.Collision.Shapes.b2CircleShape;	
+var b2MouseJointDef = Box2D.Dynamics.Joints.b2MouseJointDef;
+var b2DistanceJointDef = Box2D.Dynamics.Joints.b2DistanceJointDef;
+var b2AABB = Box2D.Collision.b2AABB;
+var b2DebugDraw = Box2D.Dynamics.b2DebugDraw;
+var b2BuoyancyController = Box2D.Dynamics.Controllers.b2BuoyancyController;
+var listener = new Box2D.Dynamics.b2ContactListener;
+
+window.addEventListener("load", init);
+
+//global variables
+var world, debug, buoyancyController, SCALE = 30, STEP = 20, TIMESTEP = 1/STEP, drag; //box2d & phys
+var stage, canvas, stageW, stageH, mapManager, manifest, preload; //createjs
+
+//duck variables
+var boxW = 100/SCALE, boxH = 100/SCALE;
+var ducks = [], duck, duckPNG, mX, speed, i = 0;
+var waterW, waterH;
+
+function init() { //initialize canvas/world and preload images
+	canvas = document.getElementById("debugCanvas");
+	stageW = 800;
+	stageH = 600;
+	
+	stage = new createjs.Stage("myCanvas"); 
+	stage.setBounds(0, 0, stageW, stageH);
+	createjs.Touch.enable(stage,true); // added for mobile	
+
+	world = new b2World(new b2Vec2(0, 10), true);
+	debug = new phys.Debug(canvas, world, SCALE);
+	drag = new phys.Drag(stage, world, SCALE);
+	
+	var rect = {x:0, y:0, width:stageW, height:stageH};
+	phys.borders(rect, world, SCALE);
+
+	manifest = [{src:"images/duck100.png", id:"duck"}, {src:"images/tile.jpg", id:"tile"}]; // array of objects
+	preload = new createjs.LoadQueue(false); // use true if on the same server	
+	preload.on("complete", loaded);	 // call the main code when ready	
+	preload.loadManifest(manifest);
+}
+
+function loaded() { //main function once preload is done
+	console.log("loaded!");
+	
+	//mapping createjs onto box2d objects
+	mapManager = new phys.MapManager();
+	boxW = boxW*SCALE;
+	boxH = boxH*SCALE;
+
+	//clicking on createjs canvas, because of preload, needs to be uploaded to server (or use firefox =\)
+	window.addEventListener('click', function(e){createDuck(e);}, false);
+
+	environment(); //creates the bathroom/environment
+	listenForContact(); //checks for when the objects hit and adds buoyancy
+	update();
+}
+
+function createDuck(e) {
+	mX = stage.mouseX;
+	speed = zim.rand(0.1, 0.5);
+	//phys.makeBox(width, height, world, scale, dynamic, friction, density, restitution, isSensor)
+	duck = phys.makeBox(boxW/SCALE, boxH/SCALE, world, SCALE, true, .5, 1, 0);
+	duck.SetPosition(new b2Vec2(mX/SCALE, (10*speed+i)/SCALE));
+	ducks.push(duck);
+	console.log(mX);
+	
+	//overlaying createjs onto box2d
+	i++; //index number for duckPNG
+	duckPNG = new createjs.Bitmap(preload.getResult("duck"));
+	duckPNG.regX = boxW/2;
+	duckPNG.regY = boxH/2;
+	stage.addChildAt(duckPNG, 1);
+	mapManager.add(new phys.Map(duck, duckPNG, "duckPNG"+i, SCALE));
+}
+
+//creates the world environment
+function environment() {
+	waterW = stageW/SCALE;
+	waterH = (stageH/2)/SCALE;
+	
+	//create tub = sensor
+	//phys.makeBox(width, height, world, scale, dynamic, friction, density, restitution, isSensor)
+	var waterSensor = phys.makeBox(waterW, waterH, world, SCALE, false, 0.1, 1, 1, true);
+	waterSensor.SetPosition(new b2Vec2((stageW/2)/SCALE, (stageH-137)/SCALE));
+	
+	//set up the buoyancy controller
+	buoyancyController = new b2BuoyancyController();
+	buoyancyController.normal.Set(0, -1);
+	buoyancyController.offset = -270/SCALE;
+	buoyancyController.useDensity = true;
+	buoyancyController.density = 2.0;
+	buoyancyController.linearDrag = 5;
+	buoyancyController.angularDrag = 2;
+	// Add the controller to the world
+	world.AddController(buoyancyController);
+	
+	//overlaying createjs onto box2d
+	var room = new createjs.Container();
+	waterW = waterW*SCALE;
+	waterH = waterH*SCALE;
+	
+	//bathroom
+	var wall = new createjs.Bitmap(preload.getResult("tile"));
+	wall.regX = boxW/2;
+	wall.regY = boxH/2;
+	room.addChild(wall);
+	
+	//tub
+	var tub = new createjs.Shape();
+	tub.graphics.f("white").r(0, stageH-waterH, waterW, waterH);
+	room.addChild(tub); //add the back side of the tub
+	stage.addChildAt(room, 0);
+	
+	var water = new createjs.Shape();
+	water.graphics.f("blue").r(0, stageH-waterH, waterW, waterH);	
+	water.alpha = 0.7;
+	stage.addChild(water);
+}
+
+function update() {
+	requestAnimationFrame(update);
+	drag.update(); // note, the added update for the mouse (before stepping)	
+	world.Step(TIMESTEP, 10, 10);
+	buoyancyController.Step(1/60);	
+	world.ClearForces();
+	//debug.update();
+	mapManager.update();
+	stage.update();
+}
+
+		
+//http://www.emanueleferonato.com/2013/02/21/using-box2d-buoyancy-controller-to-create-a-pool/
+function listenForContact(){
+	listener.BeginContact = function(contact){
+		var fixtureA = contact.GetFixtureA();
+		var fixtureB = contact.GetFixtureB();
+		if(fixtureA.IsSensor()){
+			var bodyB = fixtureB.GetBody();
+			if(!bodyB.GetControllerList()) buoyancyController.AddBody(bodyB);
+		}else if(fixtureB.IsSensor()){
+			var bodyA = fixtureA.GetBody();
+			if(!bodyA.GetControllerList()) buoyancyController.AddBody(bodyA);
+		}
+	}
+	listener.EndContact = function(contact){
+		var fixtureA = contact.GetFixtureA();
+		var fixtureB = contact.GetFixtureB();
+		if(fixtureA.IsSensor()){
+			var bodyB = fixtureB.GetBody();
+			console.log(bodyB);
+			if(bodyB.GetControllerList()) buoyancyController.RemoveBody(bodyB);
+		}else if(fixtureB.IsSensor()){
+			var bodyA = fixtureA.GetBody();
+			if(bodyA.GetControllerList()) buoyancyController.RemoveBody(bodyA);
+		}
+	}
+	world.SetContactListener(listener);
+}
+
+
+</script>
+</head>
+
+<body>
+
+<canvas id="debugCanvas" width="800" height="600"></canvas>
+<canvas id="myCanvas" width="800" height="600"></canvas>
+
+
+</body>
+</html>
